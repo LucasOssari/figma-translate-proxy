@@ -29,7 +29,9 @@ export default async function handler(req, res) {
       });
     }
 
-    /* CHATGPT */
+    /* ==========================
+       CHATGPT
+    ========================== */
     if (engine === "chatgpt") {
       const key = process.env.OPENAI_API_KEY;
       if (!key) {
@@ -66,24 +68,34 @@ export default async function handler(req, res) {
       if (!r.ok) return res.status(r.status).json({ error: raw });
 
       const data = JSON.parse(raw);
-      const result =
-        data?.choices?.[0]?.message?.content?.trim() ?? String(text);
+      const result = data?.choices?.[0]?.message?.content?.trim() ?? String(text);
 
       return res.status(200).json({ result });
     }
 
-    /* DEEPL */
+    /* ==========================
+       DEEPL (header-based auth)
+    ========================== */
     const key = process.env.DEEPL_KEY;
     if (!key) return res.status(500).json({ error: "DEEPL_KEY missing on server" });
 
+    // ✅ Auto free/pro endpoint
+    const isFree = /:fx$/i.test(key);
+    const deeplUrl = isFree
+      ? "https://api-free.deepl.com/v2/translate"
+      : "https://api.deepl.com/v2/translate";
+
     const params = new URLSearchParams();
-    params.append("auth_key", key);
     params.append("text", String(text));
     params.append("target_lang", String(targetLang).toUpperCase());
 
-    const r = await fetch("https://api-free.deepl.com/v2/translate", {
+    const r = await fetch(deeplUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        // ✅ NEW AUTH (no more auth_key in body)
+        "Authorization": `DeepL-Auth-Key ${key}`
+      },
       body: params.toString()
     });
 
