@@ -37,7 +37,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ✅ Vérification des variables d'environnement
     const host = process.env.SFTP_HOST;
     const port = Number(process.env.SFTP_PORT || 22);
     const username = process.env.SFTP_USER;
@@ -58,7 +57,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // ✅ Récupération des paramètres
     const folder = sanitizeName(
       typeof req.query?.folder === "string" ? req.query.folder : "ENCARTS"
     );
@@ -73,7 +71,6 @@ export default async function handler(req, res) {
 
     console.log(`[FTP] Uploading: folder=${folder}, file=${filename}`);
 
-    // ✅ Lecture du body
     const contentType = String(req.headers["content-type"] || "").toLowerCase();
     console.log(`[FTP] Content-Type: ${contentType}`);
     
@@ -82,12 +79,10 @@ export default async function handler(req, res) {
 
     let fileBuffer;
 
-    // Option A: binaire direct (application/octet-stream) - RECOMMANDÉ
     if (contentType.includes("application/octet-stream")) {
       fileBuffer = raw;
       console.log(`[FTP] Using binary mode (octet-stream)`);
     } else {
-      // Option B: JSON { bytes: number[] }
       console.log(`[FTP] Trying JSON mode...`);
       let payload = {};
       try {
@@ -116,7 +111,6 @@ export default async function handler(req, res) {
 
     console.log(`[FTP] File buffer size: ${fileBuffer.length} bytes`);
 
-    // ✅ Upload SFTP
     const folderPath = `${remoteDir}/${folder}`;
     const remotePath = `${folderPath}/${filename}`;
 
