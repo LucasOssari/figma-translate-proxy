@@ -18,8 +18,55 @@ async function readRawBody(req) {
 function sanitizeName(s) {
   return String(s || "")
     .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, " ")
+    .replace(/\s+/g, "_")
     .trim();
+}
+
+async function ensureDirectory(sftp, dirPath) {
+  const normalizedPath = dirPath.replace(/\/+/g, '/').replace(/\/$/, '');
+  
+  try {
+    const exists = await sftp.exists(normalizedPath);
+    if (exists) {
+      console.log(`Directory already exists: ${normalizedPath}`);
+      return true;
+    }
+  } catch (e) {
+    console.log(`Check exists error: ${e.message}`);
+  }
+
+  const parts = normalizedPath.split('/').filter(Boolean);
+  
+  let currentPath = normalizedPath.startsWith('/') ? '/' : '';
+  
+  for (const part of parts) {
+    currentPath += (currentPath === '/' ? '' : '/') + part;
+    
+    try {
+      const exists = await sftp.exists(currentPath);
+      if (!exists) {
+        console.log(`Creating directory: ${currentPath}`);
+        await sftp.mkdir(currentPath);
+        console.log(`✅ Created: ${currentPath}`);
+      } else {
+        console.log(`Already exists: ${currentPath}`);
+      }
+    } catch (mkdirErr) {
+      console.log(`Mkdir attempt for ${currentPath}: ${mkdirErr.message}`);
+      
+      try {
+        const nowExists = await sftp.exists(currentPath);
+        if (!nowExists) {
+          throw new Error(`Cannot create directory: ${currentPath} - ${mkdirErr.message}`);
+        }
+      } catch (checkErr) {
+        console.error(`Failed to create ${currentPath}: ${checkErr.message}`);
+        throw checkErr;
+      }
+    }
+  }
+  
+  return true;
 }
 
 export default async function handler(req, res) {
@@ -46,8 +93,12 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "SFTP credentials not configured" });
     }
 
-    const folder = sanitizeName(req.query.folder || "ENCARTS");
-    const filename = sanitizeName(req.query.name || "");
+    const folder = sanitizeName(
+      typeof req.query?.folder === "string" ? req.query.folder : "ENCARTS"
+    );
+    const filename = sanitizeName(
+      typeof req.query?.name === "string" ? req.query.name : ""
+    );
 
     if (!filename) {
       return res.status(400).json({ error: "Missing filename" });
@@ -70,70 +121,32 @@ export default async function handler(req, res) {
       retries: 2
     });
 
-    // ✅ Obtenir le répertoire home (où on a les droits)
     const homeDir = await sftp.cwd();
     console.log(`Home directory: ${homeDir}`);
 
-    // ✅ Utiliser SFTP_REMOTE_DIR ou le home
     let baseDir = process.env.SFTP_REMOTE_DIR || homeDir;
     
-    // Si SFTP_REMOTE_DIR est relatif, le combiner avec home
     if (baseDir && !baseDir.startsWith('/')) {
       baseDir = `${homeDir}/${baseDir}`;
     }
     
-    baseDir = baseDir.replace(/\/+/g, '/').replace(/\/$/, ''); // Nettoyer
-    
+    baseDir = baseDir.replace(/\/+/g, '/').replace(/\/$/, '');
     console.log(`Base directory: ${baseDir}`);
 
-    // Construire les chemins finaux
-    const folderPath = `${baseDir}/${folder}`;
-    const remotePath = `${folderPath}/${filename}`;
-
-    console.log(`Target folder: ${folderPath}`);
-    console.log(`Target file: ${remotePath}`);
-
-    // ✅ Vérifier si le dossier de base existe
     const baseDirExists = await sftp.exists(baseDir);
-    console.log(`Base dir exists: ${baseDirExists}`);
-
     if (!baseDirExists) {
-      console.log(`Creating base dir: ${baseDir}`);
-      try {
-        await sftp.mkdir(baseDir, true);
-      } catch (e) {
-        console.log(`Base dir creation error: ${e.message}`);
-      }
+      console.log(`Base dir doesn't exist, trying to create: ${baseDir}`);
+      await ensureDirectory(sftp, baseDir);
     }
 
-    // ✅ Créer le sous-dossier (ENCARTS_2026-01-28)
-    const folderExists = await sftp.exists(folderPath);
-    console.log(`Folder exists: ${folderExists}`);
+    const folderPath = `${baseDir}/${folder}`;
+    console.log(`Target folder path: ${folderPath}`);
     
-    if (!folderExists) {
-      console.log(`Creating folder: ${folderPath}`);
-      try {
-        await sftp.mkdir(folderPath, true);
-        console.log(`Folder created successfully`);
-      } catch (mkdirErr) {
-        console.log(`Mkdir error: ${mkdirErr.message}`);
-        // Si on ne peut pas créer, essayer d'uploader directement dans baseDir
-        const fallbackPath = `${baseDir}/${filename}`;
-        console.log(`Fallback: uploading to ${fallbackPath}`);
-        await sftp.put(raw, fallbackPath);
-        
-        return res.status(200).json({
-          ok: true,
-          remotePath: fallbackPath,
-          bytes: raw.length,
-          warning: "Uploaded to base directory (no subfolder permissions)"
-        });
-      }
-    }
-
-    console.log(`Uploading ${raw.length} bytes to ${remotePath}...`);
+    await ensureDirectory(sftp, folderPath);
+    const remotePath = `${folderPath}/${filename}`;
+    console.log(`Uploading to: ${remotePath} (${raw.length} bytes)`);
     await sftp.put(raw, remotePath);
-    console.log(`Upload successful`);
+    console.log(`✅ Upload successful`);
 
     return res.status(200).json({
       ok: true,
