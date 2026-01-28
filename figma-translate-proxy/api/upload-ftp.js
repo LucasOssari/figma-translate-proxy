@@ -7,28 +7,14 @@ export const config = {
   }
 };
 
-function setCors(res) {
+export default async function handler(req, res) {
+  // ✅ CORS EN PREMIER - AVANT TOUT
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-}
-
-async function readRawBody(req) {
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  return Buffer.concat(chunks);
-}
-
-function sanitizeName(s) {
-  return String(s || "")
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export default async function handler(req, res) {
-  setCors(res);
+  res.setHeader("Access-Control-Max-Age", "86400");
   
+  // ✅ OPTIONS doit retourner 200 immédiatement
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -48,8 +34,12 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "SFTP not configured" });
     }
 
-    const folder = sanitizeName(req.query?.folder || "ENCARTS");
-    const filename = sanitizeName(req.query?.name || "");
+    const folder = sanitizeName(
+      typeof req.query?.folder === "string" ? req.query.folder : "ENCARTS"
+    );
+    const filename = sanitizeName(
+      typeof req.query?.name === "string" ? req.query.name : ""
+    );
 
     if (!filename) {
       return res.status(400).json({ error: "Missing filename" });
@@ -96,11 +86,23 @@ export default async function handler(req, res) {
       details: e.code || 'UNKNOWN'
     });
   } finally {
-    // Toujours fermer la connexion
     try {
       await sftp.end();
     } catch (e) {
       console.error("SFTP close error:", e);
     }
   }
+}
+
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks);
+}
+
+function sanitizeName(s) {
+  return String(s || "")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
