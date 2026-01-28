@@ -1,8 +1,7 @@
 {
   "name": "figma-translate-proxy",
-  "private": true
+  "version": "1.0.0",
   "dependencies": {
     "ssh2-sftp-client": "^10.0.3"
   }
 }
-
