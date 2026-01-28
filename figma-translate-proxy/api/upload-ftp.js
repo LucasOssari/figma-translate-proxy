@@ -1,5 +1,4 @@
-import { Client } from 'ssh2';
-import { promisify } from 'util';
+import SftpClient from 'ssh2-sftp-client';
 
 export const config = {
   api: { 
@@ -23,71 +22,6 @@ function sanitizeName(s) {
     .trim();
 }
 
-function sftpUpload(host, port, username, password, localBuffer, remotePath) {
-  return new Promise((resolve, reject) => {
-    const conn = new Client();
-    
-    conn.on('ready', () => {
-      conn.sftp((err, sftp) => {
-        if (err) {
-          conn.end();
-          return reject(err);
-        }
-
-        const writeStream = sftp.createWriteStream(remotePath);
-        
-        writeStream.on('close', () => {
-          conn.end();
-          resolve();
-        });
-        
-        writeStream.on('error', (err) => {
-          conn.end();
-          reject(err);
-        });
-
-        writeStream.write(localBuffer);
-        writeStream.end();
-      });
-    });
-
-    conn.on('error', reject);
-
-    conn.connect({
-      host,
-      port,
-      username,
-      password,
-      readyTimeout: 20000
-    });
-  });
-}
-
-async function ensureDir(host, port, username, password, dirPath) {
-  return new Promise((resolve, reject) => {
-    const conn = new Client();
-    
-    conn.on('ready', () => {
-      conn.sftp((err, sftp) => {
-        if (err) {
-          conn.end();
-          return reject(err);
-        }
-
-        sftp.mkdir(dirPath, { mode: 0o755 }, (mkdirErr) => {
-          conn.end();
-          // Ignore error if directory exists
-          resolve();
-        });
-      });
-    });
-
-    conn.on('error', reject);
-
-    conn.connect({ host, port, username, password });
-  });
-}
-
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -102,10 +36,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const sftp = new SftpClient();
+
   try {
     const { SFTP_HOST, SFTP_USER, SFTP_PASS } = process.env;
     const port = Number(process.env.SFTP_PORT || 22);
-    const remoteDir = process.env.SFTP_REMOTE_DIR || "/uploads";
+    const remoteDir = process.env.SFTP_REMOTE_DIR || "/";
 
     if (!SFTP_HOST || !SFTP_USER || !SFTP_PASS) {
       return res.status(500).json({ error: "SFTP credentials not configured" });
@@ -124,20 +60,45 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Empty file" });
     }
 
-    const folderPath = `${remoteDir}/${folder}`;
-    const remotePath = `${folderPath}/${filename}`;
-
-    console.log(`Creating directory: ${folderPath}`);
+    console.log(`Connecting to SFTP: ${SFTP_USER}@${SFTP_HOST}:${port}`);
     
+    await sftp.connect({
+      host: SFTP_HOST,
+      port,
+      username: SFTP_USER,
+      password: SFTP_PASS,
+      readyTimeout: 20000,
+      retries: 2
+    });
+
+    // ✅ Normaliser le chemin (supprimer les doubles slashes)
+    const folderPath = `${remoteDir}/${folder}`.replace(/\/+/g, '/');
+    const remotePath = `${folderPath}/${filename}`.replace(/\/+/g, '/');
+
+    console.log(`Target folder: ${folderPath}`);
+    console.log(`Target file: ${remotePath}`);
+
+    // ✅ Créer le dossier avec mkdir récursif
     try {
-      await ensureDir(SFTP_HOST, port, SFTP_USER, SFTP_PASS, folderPath);
-    } catch (e) {
-      console.log(`Directory creation info: ${e.message}`);
+      const exists = await sftp.exists(folderPath);
+      console.log(`Folder exists: ${exists}`);
+      
+      if (!exists) {
+        console.log(`Creating folder: ${folderPath}`);
+        await sftp.mkdir(folderPath, true); // ✅ true = récursif
+        console.log(`Folder created successfully`);
+      }
+    } catch (mkdirErr) {
+      console.log(`Mkdir warning: ${mkdirErr.message}`);
+      // Continue anyway, the folder might exist
     }
 
-    console.log(`Uploading to: ${remotePath} (${raw.length} bytes)`);
+    console.log(`Uploading ${raw.length} bytes...`);
     
-    await sftpUpload(SFTP_HOST, port, SFTP_USER, SFTP_PASS, raw, remotePath);
+    // ✅ Upload avec Buffer directement
+    await sftp.put(raw, remotePath);
+    
+    console.log(`Upload successful: ${remotePath}`);
 
     return res.status(200).json({
       ok: true,
@@ -151,5 +112,11 @@ export default async function handler(req, res) {
       error: e.message || String(e),
       code: e.code || 'UNKNOWN'
     });
+  } finally {
+    try {
+      await sftp.end();
+    } catch (e) {
+      console.error("SFTP close error:", e);
+    }
   }
 }
