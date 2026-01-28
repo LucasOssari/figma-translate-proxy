@@ -25,7 +25,6 @@ function sanitizeName(s) {
 }
 
 export default async function handler(req, res) {
-  // ✅ CORS AVANT TOUT
   setCors(res);
   
   if (req.method === "OPTIONS") {
@@ -43,17 +42,9 @@ export default async function handler(req, res) {
     const password = process.env.SFTP_PASS;
     const remoteDir = process.env.SFTP_REMOTE_DIR || "/uploads";
 
-    console.log(`[FTP] Host: ${host}, User: ${username}, Port: ${port}`);
-
     if (!host || !username || !password) {
-      console.error("[FTP] Missing SFTP credentials");
       return res.status(500).json({
-        error: "SFTP env missing (SFTP_HOST/SFTP_USER/SFTP_PASS)",
-        debug: {
-          hasHost: !!host,
-          hasUser: !!username,
-          hasPass: !!password
-        }
+        error: "SFTP credentials not configured"
       });
     }
 
@@ -65,88 +56,34 @@ export default async function handler(req, res) {
     );
 
     if (!filename) {
-      console.error("[FTP] Missing filename parameter");
       return res.status(400).json({ error: "Missing ?name=filename" });
     }
 
-    console.log(`[FTP] Uploading: folder=${folder}, file=${filename}`);
-
-    const contentType = String(req.headers["content-type"] || "").toLowerCase();
-    console.log(`[FTP] Content-Type: ${contentType}`);
-    
     const raw = await readRawBody(req);
-    console.log(`[FTP] Raw body size: ${raw.length} bytes`);
-
-    let fileBuffer;
-
-    if (contentType.includes("application/octet-stream")) {
-      fileBuffer = raw;
-      console.log(`[FTP] Using binary mode (octet-stream)`);
-    } else {
-      console.log(`[FTP] Trying JSON mode...`);
-      let payload = {};
-      try {
-        payload = JSON.parse(raw.toString("utf8") || "{}");
-      } catch (parseErr) {
-        console.error(`[FTP] JSON parse error:`, parseErr);
-        return res.status(400).json({
-          error: "Bad Request: cannot parse JSON",
-          contentType,
-          bodyPreview: raw.toString("utf8").slice(0, 100)
-        });
-      }
-
-      const bytes = Array.isArray(payload?.bytes) ? payload.bytes : null;
-      if (!bytes || !bytes.length) {
-        console.error(`[FTP] No bytes array in payload`);
-        return res.status(400).json({
-          error: "Bad Request: expected { bytes: number[] }",
-          receivedKeys: Object.keys(payload)
-        });
-      }
-
-      fileBuffer = Buffer.from(Uint8Array.from(bytes));
-      console.log(`[FTP] Converted from JSON bytes array`);
-    }
-
-    console.log(`[FTP] File buffer size: ${fileBuffer.length} bytes`);
 
     const folderPath = `${remoteDir}/${folder}`;
     const remotePath = `${folderPath}/${filename}`;
 
-    console.log(`[FTP] Connecting to SFTP...`);
     const sftp = new SftpClient();
-    
     await sftp.connect({ host, port, username, password });
-    console.log(`[FTP] Connected!`);
 
     try {
-      console.log(`[FTP] Creating directory: ${folderPath}`);
       await sftp.mkdir(folderPath, true);
-    } catch (mkdirErr) {
-      console.log(`[FTP] Directory already exists or creation failed (ignoring)`);
+    } catch (e) {
+      // Directory exists
     }
 
-    console.log(`[FTP] Uploading to: ${remotePath}`);
-    await sftp.put(fileBuffer, remotePath);
-    console.log(`[FTP] Upload successful!`);
-
+    await sftp.put(raw, remotePath);
     await sftp.end();
-    console.log(`[FTP] Connection closed`);
 
     return res.status(200).json({
       ok: true,
       remotePath,
-      bytes: fileBuffer.length,
-      folder,
-      filename
+      bytes: raw.length
     });
 
   } catch (e) {
-    console.error(`[FTP] ERROR:`, e);
-    return res.status(500).json({ 
-      error: String(e?.message || e),
-      stack: process.env.NODE_ENV === "development" ? e?.stack : undefined
-    });
+    console.error("FTP error:", e);
+    return res.status(500).json({ error: String(e?.message || e) });
   }
 }
