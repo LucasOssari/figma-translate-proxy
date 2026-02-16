@@ -1,13 +1,13 @@
-// api/generate-gif.js
 const GIFEncoder = require('gifencoder');
 const { createCanvas, loadImage } = require('canvas');
 
 module.exports = async (req, res) => {
-  // CORS headers
+  // CORS headers - TRÈS IMPORTANT
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
+  // Gérer la requête OPTIONS (preflight)
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -31,9 +31,9 @@ module.exports = async (req, res) => {
     encoder.createReadStream().on('data', chunk => chunks.push(chunk));
     
     encoder.start();
-    encoder.setRepeat(0); // Loop infiniment
-    encoder.setDelay(Math.round(1000 / fps)); // Délai entre frames
-    encoder.setQuality(10); // Qualité (1-20, 1 = meilleur)
+    encoder.setRepeat(0);
+    encoder.setDelay(Math.round(1000 / fps));
+    encoder.setQuality(10);
     
     // Créer un canvas
     const canvas = createCanvas(width, height);
@@ -41,26 +41,18 @@ module.exports = async (req, res) => {
     
     // Ajouter chaque frame
     for (const frameData of frames) {
-      // Convertir base64 en image
       const img = await loadImage(`data:image/png;base64,${frameData}`);
-      
-      // Dessiner sur le canvas
       ctx.clearRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
-      
-      // Ajouter au GIF
       encoder.addFrame(ctx);
     }
     
     encoder.finish();
     
-    // Attendre que tous les chunks soient prêts
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    // Créer le buffer final
     const buffer = Buffer.concat(chunks);
     
-    // Retourner le GIF en base64
     res.status(200).json({
       success: true,
       gif: buffer.toString('base64')
@@ -68,6 +60,9 @@ module.exports = async (req, res) => {
     
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 };
